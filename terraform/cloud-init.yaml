@@ -1,0 +1,7 @@
+#cloud-config
+# This is destructive to the fresh Ubuntu root filesystem. The script is pinned
+# and checksum-verified before execution.
+runcmd:
+  - curl --fail --show-error --location https://raw.githubusercontent.com/elitak/nixos-infect/${nixos_infect_rev}/nixos-infect --output /tmp/nixos-infect
+  - echo "${nixos_infect_sha256}  /tmp/nixos-infect" | sha256sum --check --strict
+  - "bash -o pipefail -c 'PROVIDER=digitalocean NIX_CHANNEL=${nix_channel} bash /tmp/nixos-infect 2>&1 | tee /tmp/nixos-infect.log'"

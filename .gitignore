@@ -1,0 +1,11 @@
+.direnv/
+.envrc
+result
+result-*
+
+terraform/.terraform/
+terraform/terraform.tfvars
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/crash.log
+terraform/*.tfplan

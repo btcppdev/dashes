@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and customize. Do not commit secrets here.
+region       = "nyc3"
+size         = "s-1vcpu-2gb"
+ssh_key_path = "~/.ssh/id_ed25519.pub"
+
+# Strongly recommended: your current public IP with /32 (and IPv6 /128).
+# ssh_source_addresses = ["203.0.113.10/32"]
+
+# This creates metrics.btcpp.dev in the DigitalOcean-managed btcpp.dev zone.
+# Set dns_zone = "" if DNS is managed by another provider.
+dns_zone   = "btcpp.dev"
+dns_record = "metrics"

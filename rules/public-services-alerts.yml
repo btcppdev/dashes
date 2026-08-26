@@ -1,0 +1,26 @@
+groups:
+  - name: public-services
+    rules:
+      - alert: PublicServiceDown
+        expr: probe_success{job="http-probes"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is unreachable"
+
+      - alert: PublicServiceSlow
+        expr: probe_duration_seconds{job="http-probes"} > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} has taken over three seconds to respond"
+
+      - alert: PublicServiceCertificateExpiring
+        expr: probe_ssl_earliest_cert_expiry{job="http-probes"} - time() < 14 * 24 * 60 * 60
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} TLS certificate expires within 14 days"

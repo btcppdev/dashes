@@ -1,0 +1,49 @@
+groups:
+  - name: applications
+    rules:
+      - alert: ApplicationMetricsDown
+        expr: up{job=~"application-.+"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} metrics endpoint is unreachable"
+
+      - alert: ApplicationHighErrorRate
+        expr: |
+          sum by (service) (rate({__name__=~"btcpp_web_http_requests_total|streamctl_http_requests_total",code=~"5.."}[10m]))
+          /
+          clamp_min(sum by (service) (rate({__name__=~"btcpp_web_http_requests_total|streamctl_http_requests_total"}[10m])), 0.001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} is returning more than 5% server errors"
+
+      - alert: ApplicationSlowP95
+        expr: |
+          histogram_quantile(0.95,
+            sum by (service, le) (rate({__name__=~"btcpp_web_http_request_duration_seconds_bucket|streamctl_http_request_duration_seconds_bucket"}[10m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} p95 request latency exceeds two seconds"
+
+      - alert: BtcppBusinessMetricsFailing
+        expr: btcpp_web_business_metrics_collection_success == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "btcpp-web business metric refresh is failing"
+
+      - alert: BtcppBusinessMetricsStale
+        expr: time() - btcpp_web_business_metrics_last_success_timestamp_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "btcpp-web business metrics have not refreshed for ten minutes"
