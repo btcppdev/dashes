@@ -9,20 +9,18 @@ exporters listed in `nixos/targets.nix`:
 
 ```text
 browser -> HTTPS/nginx -> Grafana (127.0.0.1:3000)
-                              |
-                              v
-                    Prometheus (127.0.0.1:9090)
-                              |
-                              v
-                    node_exporter (127.0.0.1:9100)
-                              |
-                 +------------+-------------+
-                 |                          |
-      CLN exporters on private IPs    blackbox HTTP/TLS probes
+                    |                   |
+                    v                   v
+          Prometheus (127.0.0.1:9090)  Loki (127.0.0.1:3100)
+                    |                   ^
+       +------------+-------------+     |
+       |                          |     +-- authenticated Alloy log pushes
+ CLN/node exporters       blackbox HTTP/TLS probes
 ```
 
-Only SSH, HTTP, and HTTPS are public. Grafana requires login. Prometheus and
-node_exporter are not reachable from the internet.
+Only SSH, HTTP, and HTTPS are public. Grafana requires login. Prometheus, Loki,
+and node_exporter are not directly reachable from the internet; nginx exposes
+only Loki's authenticated push route.
 
 ## What you need
 
@@ -117,6 +115,18 @@ Grafana cannot start without these credential files. Its OAuth user-info lookup
 reads the signed-in person's stable ID, display name, and current roles from
 Bitcoin++. Grafana admits only identities whose roles contain `global-admin`.
 
+Generate the credential used by remote Alloy agents to push logs into Loki:
+
+```bash
+make loki-credentials
+```
+
+Save the printed `LOKI_PUSH_USERNAME` and `LOKI_PUSH_PASSWORD` lines. The
+command is idempotent and prints the existing credential on later runs instead
+of rotating it. Install those lines as the Alloy environment file on the CLN
+container. The plaintext server copy is root-only and outside the Nix store;
+nginx receives only a runtime SHA-512 password hash.
+
 ### 6. Validate and deploy
 
 ```bash
@@ -126,8 +136,9 @@ make deploy
 make status
 ```
 
-The first remote build can take several minutes. Nix will persist Prometheus data
-under `/var/lib/prometheus2` and Grafana state under `/var/lib/grafana`.
+The first remote build can take several minutes. Nix will persist Prometheus
+data under `/var/lib/prometheus2`, Loki logs under `/var/lib/loki`, and Grafana
+state under `/var/lib/grafana`.
 
 ### 7. Log in
 
@@ -143,8 +154,13 @@ these dashboards should already be present under the **NixOS** folder:
   TLS expiry for `btcpp.dev` and `stream.btcpp.dev`.
 - **Applications** — request rate, server-error ratio, latency percentiles,
   in-flight work, busiest routes, and Go memory for btcpp-web and streamctl.
+- **Streamctl Operations** — active and failed streams, measured stream egress,
+  estimated per-destination bandwidth, GPU queue pressure, public-site health,
+  and streamctl host resources.
 - **Bitcoin++ business** — privacy-safe ticket, check-in, speaker, volunteer,
   and recording-broadcast aggregates by conference and bounded workflow state.
+
+Grafana Explore also includes the provisioned **Loki** datasource for CLN logs.
 
 ## Normal operations
 
@@ -161,6 +177,41 @@ Prometheus retains 30 days of samples. Size and retention are deliberately
 modest for a small installation. Back up `/var/lib/grafana` if dashboards or
 users are edited through the UI; Prometheus history is usually treated as
 rebuildable, but can also be snapshotted.
+
+Loki retains 14 days of logs on the local filesystem. Treat those logs as
+sensitive: CLN messages can contain node, peer, channel, invoice, and plugin
+details. Loki's query API remains loopback-only and is reachable by users only
+through the OAuth-protected Grafana datasource.
+
+## Core Lightning logs
+
+Run Grafana Alloy inside the CLN container and send its file source to:
+
+```text
+https://metrics.btcpp.dev/loki/api/v1/push
+```
+
+The nginx location accepts authenticated `POST` requests from any source and
+proxies them to loopback-only Loki. Use the generated high-entropy credential
+only for log shippers. The CLN host needs outbound HTTPS access only; do not
+expose an Alloy listener.
+
+Install the output of `make loki-credentials` at:
+
+```text
+/var/lib/alloy-secrets/loki.env
+```
+
+After Alloy begins shipping, select the **Loki** datasource in Grafana Explore
+and search for critical CLN messages:
+
+```logql
+{job="cln", node="btcpp"} |= "BROKEN"
+```
+
+Keep labels bounded to values such as `job`, `node`, `service`, and `level`.
+Peer IDs, channel IDs, invoice labels, and raw plugin-provided values belong in
+the log body rather than labels.
 
 ## Add Core Lightning nodes
 
@@ -222,6 +273,12 @@ which status code it returns, and when its TLS certificate expires. Rules under
 `rules/public-services-alerts.yml` flag sustained downtime, responses over three
 seconds, and certificates within 14 days of expiry.
 
+`rules/streamctl-alerts.yml` additionally flags failed streams, active streams
+with effectively no egress, GPU queues stalled for over an hour, unresolved GPU
+failures, an unreachable streamctl node exporter, and root-disk usage above
+85%. These rules are loaded into Prometheus but still require Alertmanager for
+external delivery.
+
 Both applications now expose request and Go runtime metrics at an authenticated
 `/metrics` endpoint. After the first monitoring-host deploy, print its generated
 tokens:
@@ -272,12 +329,12 @@ services.prometheus.exporters.node = {
 networking.firewall.interfaces.<private-interface>.allowedTCPPorts = [ 9100 ];
 ```
 
-Then add a target to the `node` scrape job in `nixos/configuration.nix`:
+Then add a target in `nixos/targets.nix`:
 
 ```nix
-targets = [
-  "127.0.0.1:9100"
-  "10.x.y.z:9100"
+nodes = [
+  { host = "dashes"; target = "127.0.0.1:9100"; }
+  { host = "another-host"; target = "10.x.y.z:9100"; }
 ];
 ```
 

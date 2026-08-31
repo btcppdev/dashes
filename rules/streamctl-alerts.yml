@@ -1,0 +1,57 @@
+groups:
+  - name: streamctl
+    rules:
+      - alert: StreamctlStreamFailed
+        expr: streamctl_stream_failed{service="streamctl"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Stream {{ $labels.stream }} failed"
+          description: "The latest systemd activation for stream {{ $labels.stream }} exited unsuccessfully."
+
+      - alert: StreamctlActiveStreamNoEgress
+        expr: |
+          streamctl_stream_active{service="streamctl"} == 1
+          and on (service, stream, stream_id)
+          rate(streamctl_stream_egress_bytes_total{service="streamctl"}[5m]) < 1024
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Active stream {{ $labels.stream }} has no meaningful egress"
+          description: "The stream service is active but has sent less than 1 KiB/s over the last five minutes."
+
+      - alert: StreamctlGPUQueueStalled
+        expr: streamctl_gpu_queue_oldest_seconds{service="streamctl"} > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The oldest streamctl GPU job has waited over one hour"
+
+      - alert: StreamctlGPUJobsFailed
+        expr: streamctl_gpu_jobs{service="streamctl",state="failed"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Streamctl has {{ $value }} unresolved failed GPU job(s)"
+
+      - alert: StreamctlNodeExporterDown
+        expr: up{job="node",instance="streamctl"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The streamctl host metrics endpoint is unreachable"
+
+      - alert: StreamctlRootDiskFilling
+        expr: |
+          (1 - node_filesystem_avail_bytes{job="node",instance="streamctl",mountpoint="/",fstype!~"tmpfs|overlay"}
+          / node_filesystem_size_bytes{job="node",instance="streamctl",mountpoint="/",fstype!~"tmpfs|overlay"}) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The streamctl root filesystem is over 85% full"

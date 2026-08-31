@@ -21,6 +21,19 @@
     }
   ];
 
+  # NixOS hosts running node_exporter. Remote listeners must be restricted to
+  # this Prometheus server at both the host and cloud firewall layers.
+  nodes = [
+    {
+      host = "dashes";
+      target = "127.0.0.1:9100";
+    }
+    {
+      host = "streamctl";
+      target = "10.108.0.4:9100";
+    }
+  ];
+
   # One entry per cln-exporter listener. Use a private VPC or VPN address; the
   # endpoint contains node/channel identifiers and has no authentication.
   #

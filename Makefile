@@ -6,7 +6,7 @@ NIXOS_REBUILD := $(shell if command -v nixos-rebuild >/dev/null 2>&1; then print
 IP := $(shell cd terraform 2>/dev/null && if command -v tofu >/dev/null 2>&1; then tofu output -raw ipv4 2>/dev/null; elif command -v terraform >/dev/null 2>&1; then terraform output -raw ipv4 2>/dev/null; else nix develop .. --command tofu output -raw ipv4 2>/dev/null; fi | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$$/ { print; exit }')
 
 .PHONY: help check-token check-ip init plan create ip wait-for-nixos \
-	pull-host-config check deploy deploy-dry ssh oauth-credentials password metrics-tokens status logs destroy update shell
+	pull-host-config check deploy deploy-dry ssh oauth-credentials loki-credentials password metrics-tokens status logs destroy update shell
 
 help: ## Show available targets.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-21s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -87,6 +87,22 @@ oauth-credentials: check-ip ## Securely install the Bitcoin++ OAuth client crede
 		mv /var/lib/dashes-secrets/grafana-oauth/client-secret.new /var/lib/dashes-secrets/grafana-oauth/client-secret'
 	@echo 'OAuth credentials installed. Deploy or restart Grafana to use them.'
 
+loki-credentials: check-ip ## Generate/install and print the Alloy-to-Loki push credential.
+	@ssh root@$(IP) 'set -eu; \
+		install -d -m 0700 /var/lib/dashes-secrets/loki-push; \
+		password_file=/var/lib/dashes-secrets/loki-push/password; \
+		if [ ! -s "$$password_file" ]; then \
+			password=$$(od -An -N32 -tx1 /dev/urandom | tr -d " \n"); \
+			umask 077; printf "%s\n" "$$password" > "$$password_file.new"; \
+			mv "$$password_file.new" "$$password_file"; \
+		fi; \
+		chmod 0600 "$$password_file"; \
+		password=$$(cat "$$password_file"); \
+		systemctl try-restart loki-push-auth.service >/dev/null 2>&1 || true; \
+		systemctl try-reload-or-restart nginx.service >/dev/null 2>&1 || true; \
+		printf "LOKI_PUSH_USERNAME=btcpp\nLOKI_PUSH_PASSWORD=%s\n" "$$password"'
+	@echo 'Copy those two lines to /var/lib/alloy-secrets/loki.env in the CLN container.'
+
 password: check-ip ## Print the generated initial Grafana admin password.
 	@ssh root@$(IP) 'cat /var/lib/grafana/secrets/admin-password'; echo
 
@@ -94,10 +110,10 @@ metrics-tokens: check-ip ## Print the generated application scrape tokens.
 	@ssh root@$(IP) 'for token in /var/lib/prometheus2/scrape-secrets/*; do printf "%s=" "$$(basename "$$token")"; cat "$$token"; echo; done'
 
 status: check-ip ## Show service state and local health endpoints.
-	ssh root@$(IP) 'systemctl --no-pager --full status prometheus prometheus-node-exporter prometheus-blackbox-exporter grafana nginx; curl -fsS http://127.0.0.1:9090/-/healthy; curl -fsS http://127.0.0.1:3000/api/health'
+	ssh root@$(IP) 'systemctl --no-pager --full status prometheus prometheus-node-exporter prometheus-blackbox-exporter loki grafana nginx; curl -fsS http://127.0.0.1:9090/-/healthy; curl -fsS http://127.0.0.1:3100/ready; curl -fsS http://127.0.0.1:3000/api/health'
 
 logs: check-ip ## Follow logs for the monitoring services.
-	ssh root@$(IP) 'journalctl -f -u prometheus -u prometheus-node-exporter -u prometheus-blackbox-exporter -u grafana -u nginx'
+	ssh root@$(IP) 'journalctl -f -u prometheus -u prometheus-node-exporter -u prometheus-blackbox-exporter -u loki -u loki-push-auth -u grafana -u nginx'
 
 update: ## Update the pinned nixpkgs revision.
 	nix flake update

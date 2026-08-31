@@ -3,6 +3,7 @@
 let
   grafanaSecretsDir = "/var/lib/grafana/secrets";
   grafanaOAuthCredentialsDir = "/var/lib/dashes-secrets/grafana-oauth";
+  lokiPushCredentialsDir = "/var/lib/dashes-secrets/loki-push";
   targets = import ./targets.nix;
 in
 {
@@ -49,6 +50,7 @@ in
       ../rules/cln-alerts.yml
       ../rules/applications-alerts.yml
       ../rules/public-services-alerts.yml
+      ../rules/streamctl-alerts.yml
     ];
     scrapeConfigs = [
       {
@@ -57,10 +59,12 @@ in
       }
       {
         job_name = "node";
-        static_configs = [{
-          targets = [ "127.0.0.1:${toString config.services.prometheus.exporters.node.port}" ];
-          labels.instance = "dashes";
-        }];
+        static_configs = map
+          (host: {
+            targets = [ host.target ];
+            labels.instance = host.host;
+          })
+          targets.nodes;
       }
       {
         job_name = "cln";
@@ -138,6 +142,53 @@ in
     openFirewall = false;
   };
 
+  # Loki is a single-node log store. Its HTTP API is loopback-only; Alloy
+  # agents may reach only the authenticated push endpoint exposed by nginx.
+  services.loki = {
+    enable = true;
+    configuration = {
+      auth_enabled = false;
+      analytics.reporting_enabled = false;
+      server = {
+        http_listen_address = "127.0.0.1";
+        http_listen_port = 3100;
+        grpc_listen_address = "127.0.0.1";
+        grpc_listen_port = 9096;
+      };
+      common = {
+        path_prefix = "/var/lib/loki";
+        replication_factor = 1;
+        ring = {
+          instance_addr = "127.0.0.1";
+          kvstore.store = "inmemory";
+        };
+        storage.filesystem = {
+          chunks_directory = "/var/lib/loki/chunks";
+          rules_directory = "/var/lib/loki/rules";
+        };
+      };
+      schema_config.configs = [{
+        from = "2026-01-01";
+        store = "tsdb";
+        object_store = "filesystem";
+        schema = "v13";
+        index = {
+          prefix = "index_";
+          period = "24h";
+        };
+      }];
+      compactor = {
+        working_directory = "/var/lib/loki/compactor";
+        retention_enabled = true;
+        delete_request_store = "filesystem";
+      };
+      limits_config = {
+        retention_period = "336h";
+        allow_structured_metadata = true;
+      };
+    };
+  };
+
   services.grafana = {
     enable = true;
     openFirewall = false;
@@ -199,15 +250,26 @@ in
       datasources.settings = {
         apiVersion = 1;
         prune = true;
-        datasources = [{
-          name = "Prometheus";
-          uid = "prometheus";
-          type = "prometheus";
-          access = "proxy";
-          url = "http://127.0.0.1:9090";
-          isDefault = true;
-          editable = false;
-        }];
+        datasources = [
+          {
+            name = "Prometheus";
+            uid = "prometheus";
+            type = "prometheus";
+            access = "proxy";
+            url = "http://127.0.0.1:9090";
+            isDefault = true;
+            editable = false;
+          }
+          {
+            name = "Loki";
+            uid = "loki";
+            type = "loki";
+            access = "proxy";
+            url = "http://127.0.0.1:3100";
+            editable = false;
+            jsonData.maxLines = 1000;
+          }
+        ];
       };
       dashboards.settings = {
         apiVersion = 1;
@@ -242,6 +304,32 @@ in
     ${pkgs.coreutils}/bin/chmod 0600 ${grafanaSecretsDir}/admin-password ${grafanaSecretsDir}/secret-key
   '';
 
+  # Derive nginx's htpasswd file at runtime from the plaintext credential that
+  # Alloy also uses. Neither representation enters the Nix store.
+  systemd.services.loki-push-auth = {
+    description = "Prepare Loki push authentication";
+    requiredBy = [ "nginx.service" ];
+    before = [ "nginx.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      Group = "nginx";
+      RuntimeDirectory = "loki-push-auth";
+      RuntimeDirectoryMode = "0750";
+      LoadCredential = [
+        "loki-push-password:${lokiPushCredentialsDir}/password"
+      ];
+      UMask = "0027";
+    };
+    script = ''
+      hash="$(${pkgs.openssl}/bin/openssl passwd -6 -stdin < "$CREDENTIALS_DIRECTORY/loki-push-password")"
+      ${pkgs.coreutils}/bin/printf 'btcpp:%s\n' "$hash" \
+        > /run/loki-push-auth/htpasswd
+      ${pkgs.coreutils}/bin/chown root:nginx /run/loki-push-auth/htpasswd
+      ${pkgs.coreutils}/bin/chmod 0640 /run/loki-push-auth/htpasswd
+    '';
+  };
+
   services.nginx = {
     enable = true;
     recommendedProxySettings = true;
@@ -252,6 +340,15 @@ in
       locations."/" = {
         proxyPass = "http://127.0.0.1:3000";
         proxyWebsockets = true;
+      };
+      locations."= /loki/api/v1/push" = {
+        proxyPass = "http://127.0.0.1:3100";
+        basicAuthFile = "/run/loki-push-auth/htpasswd";
+        extraConfig = ''
+          limit_except POST { deny all; }
+          client_max_body_size 16m;
+          proxy_read_timeout 60s;
+        '';
       };
     };
   };
