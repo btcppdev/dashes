@@ -2,6 +2,7 @@
 
 let
   grafanaSecretsDir = "/var/lib/grafana/secrets";
+  grafanaOAuthCredentialsDir = "/var/lib/dashes-secrets/grafana-oauth";
   targets = import ./targets.nix;
 in
 {
@@ -37,6 +38,9 @@ in
   # Prometheus is deliberately not exposed through nginx or the firewall.
   services.prometheus = {
     enable = true;
+    # Scrape bearer tokens are generated on the host and intentionally absent
+    # from the Nix store, so build-time validation can only check syntax.
+    checkConfig = "syntax-only";
     listenAddress = "127.0.0.1";
     port = 9090;
     retentionTime = "30d";
@@ -153,6 +157,42 @@ in
       };
       analytics.reporting_enabled = false;
       users.allow_sign_up = false;
+      auth = {
+        disable_login_form = true;
+        # Generic OAuth does not persist an auth ID. Permit Grafana to relink
+        # returning users by the synthetic, provider-controlled email derived
+        # from the stable Bitcoin++ person ID.
+        oauth_allow_insecure_email_lookup = true;
+        login_maximum_inactive_lifetime_duration = "30m";
+        login_maximum_lifetime_duration = "1h";
+      };
+      "auth.basic".enabled = false;
+      "auth.generic_oauth" = {
+        enabled = true;
+        name = "Bitcoin++";
+        icon = "signin";
+        allow_sign_up = true;
+        auto_login = true;
+        client_id = "$__file{/run/credentials/grafana.service/oauth-client-id}";
+        client_secret = "$__file{/run/credentials/grafana.service/oauth-client-secret}";
+        auth_url = "https://btcpp.dev/oauth/authorize";
+        token_url = "https://btcpp.dev/oauth/token";
+        api_url = "https://btcpp.dev/api/v1/me/identity";
+        auth_style = "InHeader";
+        scopes = "identity:self:read";
+        use_pkce = true;
+        login_attribute_path = "data.id";
+        name_attribute_path = "data.name";
+        # Grafana otherwise unconditionally probes api_url + "/emails" when
+        # the identity response has no email.  Keep the OAuth scope minimal
+        # and derive a stable, unique internal address from the person ID.
+        email_attribute_path = "join('', [data.id, '@metrics.btcpp.dev'])";
+        groups_attribute_path = "data.roles";
+        allowed_groups = "global-admin";
+        role_attribute_path = "contains(data.roles, 'global-admin') && 'Admin' || 'None'";
+        role_attribute_strict = true;
+        skip_org_role_sync = false;
+      };
     };
     provision = {
       enable = true;
@@ -182,6 +222,13 @@ in
       };
     };
   };
+
+  # Keep OAuth credentials outside both the Nix store and Terraform state.
+  # systemd exposes these root-owned files read-only to the Grafana service.
+  systemd.services.grafana.serviceConfig.LoadCredential = [
+    "oauth-client-id:${grafanaOAuthCredentialsDir}/client-id"
+    "oauth-client-secret:${grafanaOAuthCredentialsDir}/client-secret"
+  ];
 
   # Generate persistent secrets on first start. They never enter the Nix store.
   systemd.services.grafana.preStart = lib.mkBefore ''

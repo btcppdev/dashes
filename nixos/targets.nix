@@ -28,5 +28,7 @@
   #   { node = "routing-1"; target = "10.10.0.5:9750"; }
   #   { node = "treasury-1"; target = "10.10.0.6:9750"; }
   # ];
-  cln = [ ];
+  cln = [
+    { node = "btcpp"; target = "45.55.129.100:9878"; }
+  ];
 }

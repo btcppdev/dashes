@@ -1,12 +1,12 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-TOFU := $(shell if command -v tofu >/dev/null 2>&1; then printf 'tofu'; elif command -v terraform >/dev/null 2>&1; then printf 'terraform'; else printf 'nix develop --command tofu'; fi)
-NIXOS_REBUILD := $(shell if command -v nixos-rebuild >/dev/null 2>&1; then printf 'nixos-rebuild'; else printf 'nix develop --command nixos-rebuild'; fi)
-IP := $(shell cd terraform 2>/dev/null && $(TOFU) output -raw ipv4 2>/dev/null)
+override TOFU := $(shell if command -v tofu >/dev/null 2>&1; then printf 'tofu'; elif command -v terraform >/dev/null 2>&1; then printf 'terraform'; else printf 'nix develop --command tofu'; fi)
+NIXOS_REBUILD := $(shell if command -v nixos-rebuild >/dev/null 2>&1; then printf 'nixos-rebuild'; else printf 'nix develop --command env TMPDIR=/tmp nixos-rebuild'; fi)
+IP := $(shell cd terraform 2>/dev/null && if command -v tofu >/dev/null 2>&1; then tofu output -raw ipv4 2>/dev/null; elif command -v terraform >/dev/null 2>&1; then terraform output -raw ipv4 2>/dev/null; else nix develop .. --command tofu output -raw ipv4 2>/dev/null; fi | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$$/ { print; exit }')
 
 .PHONY: help check-token check-ip init plan create ip wait-for-nixos \
-	pull-host-config check deploy deploy-dry ssh password metrics-tokens status logs destroy update shell
+	pull-host-config check deploy deploy-dry ssh oauth-credentials password metrics-tokens status logs destroy update shell
 
 help: ## Show available targets.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-21s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -59,18 +59,33 @@ check: ## Evaluate the NixOS configuration without building it.
 	nix develop --command jq empty dashboards/*.json
 
 deploy: check-ip ## Build on the droplet and switch to this NixOS configuration.
-	$(NIXOS_REBUILD) switch --flake .#dashes \
+	TMPDIR=/tmp $(NIXOS_REBUILD) switch --flake .#dashes \
 		--target-host root@$(IP) \
 		--build-host root@$(IP) \
 		--no-reexec
 
 deploy-dry: check-ip ## Validate activation on the host without switching.
-	$(NIXOS_REBUILD) dry-activate --flake .#dashes \
+	TMPDIR=/tmp $(NIXOS_REBUILD) dry-activate --flake .#dashes \
 		--target-host root@$(IP) \
 		--build-host root@$(IP)
 
 ssh: check-ip ## SSH into the monitoring host.
 	ssh root@$(IP)
+
+oauth-credentials: check-ip ## Securely install the Bitcoin++ OAuth client credentials.
+	@read -r -p 'Bitcoin++ OAuth client ID: ' client_id; \
+	read -r -s -p 'Bitcoin++ OAuth client secret: ' client_secret; echo; \
+	if [ -z "$$client_id" ] || [ -z "$$client_secret" ]; then echo 'ERROR: both values are required.' >&2; exit 1; fi; \
+	printf '%s\n%s\n' "$$client_id" "$$client_secret" | ssh root@$(IP) 'set -eu; \
+		install -d -m 0700 /var/lib/dashes-secrets/grafana-oauth; \
+		IFS= read -r client_id; IFS= read -r client_secret; \
+		test -n "$$client_id"; test -n "$$client_secret"; \
+		umask 077; \
+		printf "%s\n" "$$client_id" > /var/lib/dashes-secrets/grafana-oauth/client-id.new; \
+		printf "%s\n" "$$client_secret" > /var/lib/dashes-secrets/grafana-oauth/client-secret.new; \
+		mv /var/lib/dashes-secrets/grafana-oauth/client-id.new /var/lib/dashes-secrets/grafana-oauth/client-id; \
+		mv /var/lib/dashes-secrets/grafana-oauth/client-secret.new /var/lib/dashes-secrets/grafana-oauth/client-secret'
+	@echo 'OAuth credentials installed. Deploy or restart Grafana to use them.'
 
 password: check-ip ## Print the generated initial Grafana admin password.
 	@ssh root@$(IP) 'cat /var/lib/grafana/secrets/admin-password'; echo

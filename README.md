@@ -36,19 +36,19 @@ the application-specific module, uploads, and secrets.
 
 ## One-time setup
 
-### 1. Choose the hostname and email
+### 1. Review the host identity
 
-Edit the three values near the top of `flake.nix`:
+The flake is configured for:
 
 ```nix
-monitoringDomain = "grafana.example.com";
-acmeEmail = "ops@example.com";
-rootSshPublicKey = "ssh-ed25519 AAAA..."; # optional but recommended
+monitoringDomain = "metrics.btcpp.dev";
+acmeEmail = "inbox@btcpp.dev";
+rootSshPublicKey = "ssh-ed25519 AAAA... niftynei@gmail.com";
 ```
 
-The SSH key created by Terraform is retained through nixos-infect, so
-`rootSshPublicKey = null` works. Declaring it in the flake makes recovery and
-future rebuilds less surprising.
+Terraform reuses the matching SSH key already registered in DigitalOcean, and
+that key is retained through nixos-infect. Declaring it in the flake makes
+recovery and future rebuilds less surprising.
 
 ### 2. Configure the droplet
 
@@ -90,13 +90,34 @@ data. Conversion normally takes 5-10 minutes.
 If DNS is not managed by DigitalOcean, run `make ip` now and create:
 
 ```text
-grafana.example.com  A  <the printed IPv4 address>
+metrics.btcpp.dev  A  <the printed IPv4 address>
 ```
 
 Wait until that name resolves to the droplet before deploying, because nginx
 will request its Let's Encrypt certificate during activation.
 
-### 5. Validate and deploy
+### 5. Register Grafana with Bitcoin++ OAuth
+
+Sign in to `https://btcpp.dev/dashboard/settings` as a global admin and create a
+confidential OAuth application named `Grafana`. Register this exact callback:
+
+```text
+https://metrics.btcpp.dev/login/generic_oauth
+```
+
+Grant only `identity:self:read`. Copy the one-time client ID and secret, then
+install them on the monitoring host without adding them to Git, the Nix store,
+Terraform state, or shell history:
+
+```bash
+make oauth-credentials
+```
+
+Grafana cannot start without these credential files. Its OAuth user-info lookup
+reads the signed-in person's stable ID, display name, and current roles from
+Bitcoin++. Grafana admits only identities whose roles contain `global-admin`.
+
+### 6. Validate and deploy
 
 ```bash
 make check
@@ -108,16 +129,12 @@ make status
 The first remote build can take several minutes. Nix will persist Prometheus data
 under `/var/lib/prometheus2` and Grafana state under `/var/lib/grafana`.
 
-### 6. Log in
+### 7. Log in
 
-```bash
-make password
-```
-
-Open `https://grafana.example.com`, sign in as `admin`, and use the printed
-generated password. Change it immediately in the Grafana UI. The provisioned
-Prometheus datasource and these dashboards should already be present under the
-**NixOS** folder:
+Open `https://metrics.btcpp.dev`. Grafana redirects to Bitcoin++ automatically;
+sign in with a current `global-admin` account and approve the requested profile
+scope. Password login is disabled. The provisioned Prometheus datasource and
+these dashboards should already be present under the **NixOS** folder:
 
 - **NixOS host overview** — the monitoring droplet itself.
 - **Core Lightning Overview** — node, channel, liquidity, payment, Tracker,

@@ -1,6 +1,6 @@
 # Copy to terraform.tfvars and customize. Do not commit secrets here.
 region       = "nyc3"
-size         = "s-1vcpu-2gb"
+size         = "s-2vcpu-4gb"
 ssh_key_path = "~/.ssh/id_ed25519.pub"
 
 # Strongly recommended: your current public IP with /32 (and IPv6 /128).

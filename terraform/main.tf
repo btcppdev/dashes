@@ -11,9 +11,15 @@ terraform {
 
 provider "digitalocean" {}
 
-resource "digitalocean_ssh_key" "deploy" {
-  name       = "${var.droplet_name}-deploy"
-  public_key = file(pathexpand(var.ssh_key_path))
+data "digitalocean_ssh_keys" "account" {}
+
+locals {
+  local_ssh_key_parts = regexall("[^[:space:]]+", trimspace(file(pathexpand(var.ssh_key_path))))
+  matching_ssh_keys = [
+    for key in data.digitalocean_ssh_keys.account.ssh_keys : key
+    if regexall("[^[:space:]]+", trimspace(key.public_key))[1] == local.local_ssh_key_parts[1]
+  ]
+  ssh_key_fingerprint = try(local.matching_ssh_keys[0].fingerprint, "")
 }
 
 resource "digitalocean_droplet" "dashes" {
@@ -21,7 +27,7 @@ resource "digitalocean_droplet" "dashes" {
   image    = "ubuntu-24-04-x64"
   region   = var.region
   size     = var.size
-  ssh_keys = [digitalocean_ssh_key.deploy.fingerprint]
+  ssh_keys = [local.ssh_key_fingerprint]
   ipv6     = true
   tags     = ["dashes", "monitoring", "nixos"]
 
@@ -35,6 +41,11 @@ resource "digitalocean_droplet" "dashes" {
   # merely because its bootstrap inputs changed later.
   lifecycle {
     ignore_changes = [image, user_data]
+
+    precondition {
+      condition     = length(local.matching_ssh_keys) == 1
+      error_message = "ssh_key_path must match exactly one SSH key already registered in the DigitalOcean account."
+    }
   }
 }
 

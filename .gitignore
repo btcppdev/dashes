@@ -5,7 +5,7 @@ result-*
 
 terraform/.terraform/
 terraform/terraform.tfvars
-terraform/*.tfstate
-terraform/*.tfstate.*
+*.tfstate
+*.tfstate.*
 terraform/crash.log
 terraform/*.tfplan

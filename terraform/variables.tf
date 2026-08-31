@@ -10,8 +10,8 @@ variable "region" {
 
 variable "size" {
   type        = string
-  default     = "s-1vcpu-2gb"
-  description = "Adequate for a small Prometheus/Grafana installation monitoring a few hosts."
+  default     = "s-2vcpu-4gb"
+  description = "Provides enough CPU and memory for a reliable nixos-infect bootstrap and the monitoring stack."
 }
 
 variable "ssh_key_path" {
@@ -38,8 +38,10 @@ variable "dns_record" {
 }
 
 variable "nix_channel" {
-  type    = string
-  default = "nixos-26.05"
+  type = string
+  # Match the known-working DigitalOcean bootstrap in ../streamer. The first
+  # nixos-rebuild deploy upgrades the host to the flake's pinned nixos-26.05.
+  default = "nixos-25.05"
 }
 
 variable "nixos_infect_rev" {
