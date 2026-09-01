@@ -182,9 +182,20 @@ in
         retention_enabled = true;
         delete_request_store = "filesystem";
       };
+      # Keep the monolithic querier/frontend gRPC path on loopback. Without an
+      # explicit address Loki advertises the host's public address even though
+      # its gRPC listener is intentionally bound to 127.0.0.1.
+      frontend_worker.frontend_address = "127.0.0.1:9096";
+      # Grafana Logs Drilldown uses Loki's pattern, volume, service-name,
+      # structured-metadata, and detected-level APIs. Keep service discovery
+      # tied to the bounded job label attached by the remote Alloy agents.
+      pattern_ingester.enabled = true;
       limits_config = {
         retention_period = "336h";
         allow_structured_metadata = true;
+        volume_enabled = true;
+        discover_log_levels = true;
+        discover_service_name = [ "job" ];
       };
     };
   };
